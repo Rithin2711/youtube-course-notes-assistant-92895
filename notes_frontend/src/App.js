@@ -23,21 +23,37 @@ function App() {
   // Simulated API endpoint root
   const API_ROOT = process.env.REACT_APP_API_ROOT || "http://localhost:5001/api";
 
-  // -- Fake: check login on mount (replace with real API auth, JWT, etc.) --
+  // -- Authentication check on mount --
   useEffect(() => {
-    // mock login - replace with token check from backend
     // PUBLIC_INTERFACE
     async function fetchUser() {
       try {
-        // Replace this with real user fetch
-        // Example: GET /user/me, returns {id, email, ...}
-        setUser({
-          id: 1,
-          email: "testuser@notegpt.com",
-          name: "Demo User",
-          avatar: null,
-        });
+        // Check for existing token in localStorage
+        const token = localStorage.getItem('auth_token');
+        if (token) {
+          // In production, validate token with backend
+          // For now, use demo user with token
+          setUser({
+            id: 1,
+            email: "demo@notegpt.com",
+            name: "Demo User",
+            avatar: null,
+            token: token
+          });
+        } else {
+          // Demo mode - auto-login for testing
+          const demoToken = 'demo-token-' + Date.now();
+          localStorage.setItem('auth_token', demoToken);
+          setUser({
+            id: 1,
+            email: "demo@notegpt.com",
+            name: "Demo User",
+            avatar: null,
+            token: demoToken
+          });
+        }
       } catch (err) {
+        console.error('Auth check failed:', err);
         setUser(null);
       }
     }
@@ -49,22 +65,60 @@ function App() {
     if (!user) return;
     async function fetchNotes() {
       setIsLoading(true);
-      // Replace with REAL API call to /notes?mine=1
-      // Public/share endpoint is /notes/shared
-      setTimeout(() => {
+      try {
+        // Try to fetch from real API
+        const response = await fetch(`${API_ROOT}/notes`, {
+          headers: {
+            'Authorization': `Bearer ${user.token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.ok) {
+          const apiNotes = await response.json();
+          // Transform API response to frontend format
+          const formattedNotes = apiNotes.map(note => ({
+            id: note.id,
+            title: note.title,
+            youtube_url: note.youtube_url || '',
+            body: note.content || '',
+            timestamps: note.timestamps || [],
+            exportable: true,
+            shared: note.is_public || false,
+          }));
+          setNotes(formattedNotes);
+        } else {
+          // Fallback to demo data if API fails
+          console.log('API not available, using demo data');
+          setNotes([
+            {
+              id: 1,
+              title: "Sample Note (Demo)",
+              youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+              body: "<p><strong>This is a demo note.</strong> Click 'Generate Notes' with a real YouTube URL to create AI-powered notes.</p>",
+              timestamps: [{ ts: 124, label: "2:04", content: "Sample timestamp." }],
+              exportable: true,
+              shared: false,
+            },
+          ]);
+        }
+      } catch (error) {
+        console.error('Failed to fetch notes:', error);
+        // Fallback to demo data on error
         setNotes([
           {
             id: 1,
-            title: "How React Works (YouTube)",
+            title: "Sample Note (Demo)",
             youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            body: "<p><strong>React</strong> is a UI library for building apps. <span data-timestamp='124'>Click here</span> to jump to 2:04.</p>",
-            timestamps: [{ ts: 124, label: "2:04", content: "Virtual DOM explained." }],
+            body: "<p><strong>This is a demo note.</strong> Click 'Generate Notes' with a real YouTube URL to create AI-powered notes.</p>",
+            timestamps: [],
             exportable: true,
             shared: false,
           },
         ]);
+      } finally {
         setIsLoading(false);
-      }, 600);
+      }
     }
     fetchNotes();
   }, [user]);
@@ -90,36 +144,96 @@ function App() {
   // PUBLIC_INTERFACE
   function handleYoutubeUrlInput(e) {
     setYoutubeUrl(e.target.value);
+    // Clear any previous error messages when user starts typing
+    if (errorMsg) {
+      setErrorMsg(null);
+    }
   }
 
   // PUBLIC_INTERFACE
   async function handleNoteSubmit() {
     if (!user) return setErrorMsg("Please log in to generate notes.");
-    if (!/^https:\/\/(www\.)?youtube\.com\/watch\?v=/.test(youtubeUrl.trim()))
-      return setErrorMsg("Input a valid YouTube course URL (ex: https://youtube.com/watch?v=...).");
+    
+    // More flexible YouTube URL validation
+    const youtubeRegex = /^https:\/\/(www\.)?(youtube\.com\/(watch\?v=|embed\/)|youtu\.be\/)/;
+    if (!youtubeRegex.test(youtubeUrl.trim())) {
+      return setErrorMsg("Please enter a valid YouTube URL (youtube.com or youtu.be)");
+    }
 
     setErrorMsg(null);
     setIsLoading(true);
 
-    // Simulate API
-    setTimeout(() => {
-      const note = {
-        id: notes.length + 1,
-        title: "Generated Note",
-        youtube_url: youtubeUrl,
-        body: "<p>Your AI notes will appear here...</p>",
-        timestamps: [],
+    try {
+      // Generate a title from the URL or use a default
+      const defaultTitle = `Notes for ${youtubeUrl.split('v=')[1]?.substring(0, 11) || 'YouTube Video'}`;
+      
+      console.log('Attempting to generate notes for:', youtubeUrl);
+      console.log('API endpoint:', `${API_ROOT}/youtube/ingest`);
+      
+      // Real API call to backend
+      const response = await fetch(`${API_ROOT}/youtube/ingest?youtube_url=${encodeURIComponent(youtubeUrl)}&title=${encodeURIComponent(defaultTitle)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.token || 'demo-token'}`
+        }
+      });
+
+      console.log('API response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('API error response:', errorData);
+        
+        // If backend is not available, fall back to demo functionality
+        if (response.status === 404 || response.status >= 500) {
+          console.log('Backend not available, using demo mode');
+          const demoNote = {
+            id: Date.now(),
+            title: defaultTitle,
+            youtube_url: youtubeUrl,
+            body: `<p><strong>Demo Note Generated!</strong></p><p>This is a demo note for: <a href="${youtubeUrl}" target="_blank">${youtubeUrl}</a></p><p>In production, this would contain AI-generated notes from the YouTube video.</p>`,
+            timestamps: [],
+            exportable: true,
+            shared: false,
+          };
+          
+          setNotes([demoNote, ...notes]);
+          setCurrentNote(demoNote);
+          setYoutubeUrl("");
+          setShowNewNoteDialog(false);
+          setErrorMsg(null);
+          return;
+        }
+        
+        throw new Error(errorData.detail || `Server error: ${response.status}`);
+      }
+
+      const newNote = await response.json();
+      console.log('Successfully generated note:', newNote);
+      
+      // Transform backend response to match frontend format
+      const formattedNote = {
+        id: newNote.id,
+        title: newNote.title,
+        youtube_url: newNote.youtube_url,
+        body: newNote.content || "<p>AI-generated notes will appear here...</p>",
+        timestamps: newNote.timestamps || [],
         exportable: true,
-        shared: false,
+        shared: newNote.is_public || false,
       };
-      setNotes([note, ...notes]);
-      setCurrentNote(note);
+
+      setNotes([formattedNote, ...notes]);
+      setCurrentNote(formattedNote);
       setYoutubeUrl("");
       setShowNewNoteDialog(false);
+      
+    } catch (error) {
+      console.error('Note generation failed:', error);
+      setErrorMsg(error.message || "Failed to generate notes. Please try again.");
+    } finally {
       setIsLoading(false);
-    }, 1200);
-
-    // Real: POST /notes {youtube_url}, and poll for note_ready
+    }
   }
 
   // PUBLIC_INTERFACE
@@ -173,9 +287,11 @@ function App() {
 
   // PUBLIC_INTERFACE
   function handleLogout() {
+    localStorage.removeItem('auth_token');
     setUser(null);
     setNotes([]);
     setCurrentNote(null);
+    setErrorMsg(null);
   }
 
   // PUBLIC_INTERFACE
@@ -200,6 +316,19 @@ function App() {
   function YoutubeInputPanel() {
     return (
       <div className="youtube-input-panel">
+        {errorMsg && (
+          <div className="error-message" style={{
+            color: '#ff4444',
+            backgroundColor: 'rgba(255, 68, 68, 0.1)',
+            padding: '8px 12px',
+            borderRadius: '4px',
+            marginBottom: '12px',
+            fontSize: '0.9rem',
+            border: '1px solid rgba(255, 68, 68, 0.3)'
+          }}>
+            {errorMsg}
+          </div>
+        )}
         <input
           value={youtubeUrl}
           onChange={handleYoutubeUrlInput}
@@ -263,8 +392,12 @@ function App() {
               <button className="logout-btn" onClick={handleLogout}>Log out</button>
             </div>
           ) : (
-            <button className="login-btn" onClick={()=>setUser({id:1,email:"try@demo.com", name:"Demo User"})}>
-              Log in
+            <button className="login-btn" onClick={()=>{
+              const demoToken = 'demo-token-' + Date.now();
+              localStorage.setItem('auth_token', demoToken);
+              setUser({id:1,email:"demo@notegpt.com", name:"Demo User", token: demoToken});
+            }}>
+              Log in (Demo)
             </button>
           )}
         </div>
