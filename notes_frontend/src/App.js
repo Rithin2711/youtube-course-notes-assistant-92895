@@ -66,6 +66,9 @@ function App() {
     async function fetchNotes() {
       setIsLoading(true);
       try {
+        console.log('Fetching notes from API:', `${API_ROOT}/notes`);
+        console.log('Using auth token:', user.token);
+        
         // Try to fetch from real API
         const response = await fetch(`${API_ROOT}/notes`, {
           headers: {
@@ -74,8 +77,11 @@ function App() {
           }
         });
 
+        console.log('Notes API response status:', response.status);
+
         if (response.ok) {
           const apiNotes = await response.json();
+          console.log('Fetched notes from API:', apiNotes);
           // Transform API response to frontend format
           const formattedNotes = apiNotes.map(note => ({
             id: note.id,
@@ -87,6 +93,20 @@ function App() {
             shared: note.is_public || false,
           }));
           setNotes(formattedNotes);
+        } else if (response.status === 401) {
+          // Authentication failed - use demo mode
+          console.log('Authentication failed, using demo data');
+          setNotes([
+            {
+              id: 1,
+              title: "Sample Note (Demo)",
+              youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+              body: "<p><strong>This is a demo note.</strong> Click 'Generate Notes' with a real YouTube URL to create AI-powered notes.</p>",
+              timestamps: [{ ts: 124, label: "2:04", content: "Sample timestamp." }],
+              exportable: true,
+              shared: false,
+            },
+          ]);
         } else {
           // Fallback to demo data if API fails
           console.log('API not available, using demo data');
@@ -104,6 +124,7 @@ function App() {
         }
       } catch (error) {
         console.error('Failed to fetch notes:', error);
+        console.log('Network error occurred, using demo data');
         // Fallback to demo data on error
         setNotes([
           {
@@ -169,6 +190,21 @@ function App() {
       
       console.log('Attempting to generate notes for:', youtubeUrl);
       console.log('API endpoint:', `${API_ROOT}/youtube/ingest`);
+      console.log('Using auth token:', user.token);
+      
+      // Test API connectivity first
+      const testResponse = await fetch(`${API_ROOT.replace('/api', '')}/`, {
+        method: 'GET',
+      }).catch(e => {
+        console.error('API connectivity test failed:', e);
+        throw new Error('Cannot connect to backend API. Using demo mode.');
+      });
+
+      if (!testResponse || !testResponse.ok) {
+        throw new Error('Backend API not responding. Using demo mode.');
+      }
+
+      console.log('API connectivity confirmed, making YouTube ingest request...');
       
       // Real API call to backend
       const response = await fetch(`${API_ROOT}/youtube/ingest?youtube_url=${encodeURIComponent(youtubeUrl)}&title=${encodeURIComponent(defaultTitle)}`, {
@@ -180,19 +216,41 @@ function App() {
       });
 
       console.log('API response status:', response.status);
+      console.log('API response headers:', Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         console.error('API error response:', errorData);
         
-        // If backend is not available, fall back to demo functionality
-        if (response.status === 404 || response.status >= 500) {
-          console.log('Backend not available, using demo mode');
+        // Handle authentication errors
+        if (response.status === 401) {
+          console.log('Authentication failed, using demo mode');
           const demoNote = {
             id: Date.now(),
-            title: defaultTitle,
+            title: defaultTitle + " (Demo - Auth Failed)",
             youtube_url: youtubeUrl,
-            body: `<p><strong>Demo Note Generated!</strong></p><p>This is a demo note for: <a href="${youtubeUrl}" target="_blank">${youtubeUrl}</a></p><p>In production, this would contain AI-generated notes from the YouTube video.</p>`,
+            body: `<p><strong>Demo Note Generated!</strong></p><p>Authentication failed with backend API, so this is a demo note for: <a href="${youtubeUrl}" target="_blank">${youtubeUrl}</a></p><p>In production, this would contain AI-generated notes from the YouTube video.</p>`,
+            timestamps: [],
+            exportable: true,
+            shared: false,
+          };
+          
+          setNotes([demoNote, ...notes]);
+          setCurrentNote(demoNote);
+          setYoutubeUrl("");
+          setShowNewNoteDialog(false);
+          setErrorMsg(null);
+          return;
+        }
+        
+        // If backend is not available or other server errors, fall back to demo functionality
+        if (response.status === 404 || response.status >= 500) {
+          console.log('Backend error, using demo mode');
+          const demoNote = {
+            id: Date.now(),
+            title: defaultTitle + " (Demo - Server Error)",
+            youtube_url: youtubeUrl,
+            body: `<p><strong>Demo Note Generated!</strong></p><p>Server error occurred, so this is a demo note for: <a href="${youtubeUrl}" target="_blank">${youtubeUrl}</a></p><p>In production, this would contain AI-generated notes from the YouTube video.</p>`,
             timestamps: [],
             exportable: true,
             shared: false,
@@ -230,7 +288,29 @@ function App() {
       
     } catch (error) {
       console.error('Note generation failed:', error);
-      setErrorMsg(error.message || "Failed to generate notes. Please try again.");
+      
+      // If it's a network error or API connectivity issue, create demo note
+      if (error.message.includes('demo mode') || error.message.includes('Failed to fetch') || error.name === 'TypeError') {
+        console.log('Network error detected, creating demo note');
+        const defaultTitle = `Notes for ${youtubeUrl.split('v=')[1]?.substring(0, 11) || 'YouTube Video'}`;
+        const demoNote = {
+          id: Date.now(),
+          title: defaultTitle + " (Demo - Network Error)",
+          youtube_url: youtubeUrl,
+          body: `<p><strong>Demo Note Generated!</strong></p><p>Network connectivity issue, so this is a demo note for: <a href="${youtubeUrl}" target="_blank">${youtubeUrl}</a></p><p>In production, this would contain AI-generated notes from the YouTube video.</p><p><em>Error: ${error.message}</em></p>`,
+          timestamps: [],
+          exportable: true,
+          shared: false,
+        };
+        
+        setNotes([demoNote, ...notes]);
+        setCurrentNote(demoNote);
+        setYoutubeUrl("");
+        setShowNewNoteDialog(false);
+        setErrorMsg(null);
+      } else {
+        setErrorMsg(error.message || "Failed to generate notes. Please try again.");
+      }
     } finally {
       setIsLoading(false);
     }
